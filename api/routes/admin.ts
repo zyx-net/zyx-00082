@@ -2,7 +2,8 @@ import { Router, type Request, type Response } from 'express';
 import db from '../db/index.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { getAuthorizationsWithDetails } from '../services/authorizationService.js';
-import type { AuthorizationWithDetails } from '../types/index.js';
+import { ABNORMAL_REASON_LABELS } from '../types/index.js';
+import type { AuthorizationWithDetails, AbnormalReason } from '../types/index.js';
 
 const router = Router();
 
@@ -26,6 +27,11 @@ router.get('/statistics', requireAuth, requireRole('admin', 'teacher'), async (r
       `).get(today) as { count: number }).count,
       expiredCount: (db.prepare('SELECT COUNT(*) as count FROM authorizations WHERE status = ?').get('EXPIRED') as { count: number }).count,
       rejectedCount: (db.prepare('SELECT COUNT(*) as count FROM authorizations WHERE status = ?').get('REJECTED') as { count: number }).count,
+      abnormalCount: (db.prepare('SELECT COUNT(*) as count FROM authorizations WHERE status = ?').get('ABNORMAL') as { count: number }).count,
+      abnormalToday: (db.prepare(`
+        SELECT COUNT(*) as count FROM authorizations
+        WHERE status = 'ABNORMAL' AND DATE(abnormal_at) = ?
+      `).get(today) as { count: number }).count,
     };
 
     res.json({ success: true, data: stats });
@@ -100,6 +106,9 @@ function generateCSV(authorizations: AuthorizationWithDetails[], date: string): 
     '核验时间',
     '完成时间',
     '拒绝原因',
+    '异常原因',
+    '异常处理人',
+    '异常处理时间',
   ];
 
   const rows = authorizations.map((auth, index) => {
@@ -112,7 +121,12 @@ function generateCSV(authorizations: AuthorizationWithDetails[], date: string): 
       COMPLETED: '已完成',
       CANCELLED: '已撤销',
       EXPIRED: '已过期',
+      ABNORMAL: '异常',
     };
+
+    const abnormalReasonLabel = auth.abnormal_reason 
+      ? ABNORMAL_REASON_LABELS[auth.abnormal_reason as AbnormalReason] 
+      : '';
 
     return [
       index + 1,
@@ -130,6 +144,9 @@ function generateCSV(authorizations: AuthorizationWithDetails[], date: string): 
       auth.verified_at ? formatDate(auth.verified_at) : '',
       auth.completed_at ? formatDate(auth.completed_at) : '',
       auth.reject_reason || '',
+      abnormalReasonLabel,
+      auth.abnormal_handler_name || '',
+      auth.abnormal_at ? formatDate(auth.abnormal_at) : '',
     ].map(field => `"${String(field).replace(/"/g, '""')}"`).join(',');
   });
 
@@ -137,11 +154,32 @@ function generateCSV(authorizations: AuthorizationWithDetails[], date: string): 
   summary += `"待审批","${authorizations.filter(a => a.status === 'PENDING_APPROVAL').length}"\n`;
   summary += `"已批准","${authorizations.filter(a => a.status === 'APPROVED').length}"\n`;
   summary += `"待核验","${authorizations.filter(a => ['APPROVED', 'PENDING_VERIFICATION'].includes(a.status)).length}"\n`;
+  summary += `"已核验","${authorizations.filter(a => a.status === 'VERIFIED').length}"\n`;
   summary += `"已完成","${authorizations.filter(a => a.status === 'COMPLETED').length}"\n`;
+  summary += `"异常","${authorizations.filter(a => a.status === 'ABNORMAL').length}"\n`;
   summary += `"已拒绝","${authorizations.filter(a => a.status === 'REJECTED').length}"\n`;
   summary += `"已撤销","${authorizations.filter(a => a.status === 'CANCELLED').length}"\n`;
   summary += `"已过期","${authorizations.filter(a => a.status === 'EXPIRED').length}"\n`;
   summary += `"总计","${authorizations.length}"\n`;
+
+  const abnormalRecords = authorizations.filter(a => a.status === 'ABNORMAL');
+  if (abnormalRecords.length > 0) {
+    summary += `\n"异常记录明细"\n`;
+    summary += `"儿童姓名","班级","接送人","异常原因","处理人","处理时间"\n`;
+    for (const auth of abnormalRecords) {
+      const reasonLabel = auth.abnormal_reason 
+        ? ABNORMAL_REASON_LABELS[auth.abnormal_reason as AbnormalReason] 
+        : '';
+      summary += [
+        auth.child_name,
+        auth.child_class || '',
+        auth.pickup_person_name,
+        reasonLabel,
+        auth.abnormal_handler_name || '',
+        auth.abnormal_at ? formatDate(auth.abnormal_at) : '',
+      ].map(field => `"${String(field).replace(/"/g, '""')}"`).join(',') + '\n';
+    }
+  }
 
   return headers.join(',') + '\n' + rows.join('\n') + summary;
 }

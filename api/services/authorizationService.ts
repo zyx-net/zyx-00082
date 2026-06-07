@@ -5,6 +5,10 @@ import type {
   CreateAuthorizationRequest,
   User,
   Child,
+  AbnormalReason,
+  HandoffQueueFilters,
+  HandoffQueueGroup,
+  HandoffQueueStatistics,
 } from '../types/index.js';
 
 export interface ValidationResult {
@@ -154,6 +158,31 @@ export function checkCancelPermission(auth: Authorization, user: User): Validati
   return { valid: true };
 }
 
+export function checkAbnormalPermission(auth: Authorization): ValidationResult {
+  const activeStates = ['APPROVED', 'PENDING_VERIFICATION', 'VERIFIED'];
+  if (!activeStates.includes(auth.status)) {
+    return { valid: false, error: `当前状态"${auth.status}"不支持标记异常，需要状态为已批准、待核验或已核验` };
+  }
+
+  if (isTimeWindowExpired(auth)) {
+    return { valid: false, error: '时间窗已过期，无法标记异常' };
+  }
+
+  if (auth.status === 'CANCELLED' || auth.status === 'EXPIRED') {
+    return { valid: false, error: '该记录已被撤销或过期，无法进行交接操作' };
+  }
+
+  return { valid: true };
+}
+
+export function validateAbnormalReason(reason: string): ValidationResult {
+  const validReasons: AbnormalReason[] = ['ID_MISMATCH', 'PICKUP_PERSON_ABSENT', 'GUARDIAN_CANCELLED'];
+  if (!validReasons.includes(reason as AbnormalReason)) {
+    return { valid: false, error: `异常原因无效，必须为以下之一：${validReasons.join('、')}` };
+  }
+  return { valid: true };
+}
+
 export function expireIfNeeded(auth: Authorization): Authorization | null {
   const autoExpireStates = ['APPROVED', 'PENDING_VERIFICATION'];
   if (autoExpireStates.includes(auth.status) && isTimeWindowExpired(auth)) {
@@ -248,15 +277,106 @@ export function getAuthorizationsWithDetails(whereClause: string, params: unknow
            c.class_name as child_class,
            u1.name as applicant_name,
            u2.name as approver_name,
-           u3.name as verifier_name
+           u3.name as verifier_name,
+           u4.name as abnormal_handler_name
     FROM authorizations a
     LEFT JOIN children c ON a.child_id = c.id
     LEFT JOIN users u1 ON a.applicant_id = u1.id
     LEFT JOIN users u2 ON a.approver_id = u2.id
     LEFT JOIN users u3 ON a.verified_by = u3.id
+    LEFT JOIN users u4 ON a.abnormal_by = u4.id
     ${whereClause}
     ORDER BY a.created_at DESC
   `;
 
   return db.prepare(query).all(...params) as AuthorizationWithDetails[];
+}
+
+export function getHandoffQueue(filters: HandoffQueueFilters = {}): { groups: HandoffQueueGroup[]; statistics: HandoffQueueStatistics } {
+  const today = new Date().toISOString().split('T')[0];
+  
+  let whereClause = `
+    WHERE DATE(a.time_window_start) = ?
+      AND a.status IN ('APPROVED', 'PENDING_VERIFICATION', 'VERIFIED', 'ABNORMAL', 'COMPLETED')
+  `;
+  const params: unknown[] = [today];
+
+  if (filters.className) {
+    whereClause += ' AND c.class_name LIKE ?';
+    params.push(`%${filters.className}%`);
+  }
+  if (filters.childName) {
+    whereClause += ' AND c.name LIKE ?';
+    params.push(`%${filters.childName}%`);
+  }
+  if (filters.pickupPersonName) {
+    whereClause += ' AND a.pickup_person_name LIKE ?';
+    params.push(`%${filters.pickupPersonName}%`);
+  }
+  if (filters.idLast4) {
+    whereClause += ' AND a.pickup_person_id_last4 = ?';
+    params.push(filters.idLast4);
+  }
+
+  const authorizations = getAuthorizationsWithDetails(whereClause, params);
+
+  const statistics: HandoffQueueStatistics = {
+    total: authorizations.length,
+    approved: authorizations.filter(a => a.status === 'APPROVED').length,
+    pendingVerification: authorizations.filter(a => a.status === 'PENDING_VERIFICATION').length,
+    verified: authorizations.filter(a => a.status === 'VERIFIED').length,
+    abnormal: authorizations.filter(a => a.status === 'ABNORMAL').length,
+    completed: authorizations.filter(a => a.status === 'COMPLETED').length,
+  };
+
+  const groupMap = new Map<string, HandoffQueueGroup>();
+  
+  for (const auth of authorizations) {
+    const key = `${auth.child_class || '未分班'}_${auth.time_window_start}_${auth.time_window_end}`;
+    
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        class_name: auth.child_class,
+        time_window_start: auth.time_window_start,
+        time_window_end: auth.time_window_end,
+        authorizations: [],
+      });
+    }
+    
+    groupMap.get(key)!.authorizations.push(auth);
+  }
+
+  const groups = Array.from(groupMap.values()).sort((a, b) => {
+    if (a.class_name !== b.class_name) {
+      return (a.class_name || '').localeCompare(b.class_name || '');
+    }
+    return new Date(a.time_window_start).getTime() - new Date(b.time_window_start).getTime();
+  });
+
+  for (const group of groups) {
+    group.authorizations.sort((a, b) => {
+      const statusOrder: Record<string, number> = {
+        VERIFIED: 0,
+        PENDING_VERIFICATION: 1,
+        APPROVED: 2,
+        ABNORMAL: 3,
+        COMPLETED: 4,
+      };
+      const orderA = statusOrder[a.status] ?? 99;
+      const orderB = statusOrder[b.status] ?? 99;
+      if (orderA !== orderB) return orderA - orderB;
+      return a.child_name.localeCompare(b.child_name);
+    });
+  }
+
+  return { groups, statistics };
+}
+
+export function getAbnormalRecords(date?: string): AuthorizationWithDetails[] {
+  const targetDate = date || new Date().toISOString().split('T')[0];
+  
+  return getAuthorizationsWithDetails(
+    `WHERE DATE(a.time_window_start) = ? AND a.status = 'ABNORMAL'`,
+    [targetDate]
+  );
 }

@@ -8,6 +8,7 @@ import GuardianApprove from '@/pages/guardian/GuardianApprove';
 import GuardianHistory from '@/pages/guardian/GuardianHistory';
 
 import TeacherHome from '@/pages/teacher/TeacherHome';
+import TeacherHandoffQueue from '@/pages/teacher/TeacherHandoffQueue';
 import TeacherVerify from '@/pages/teacher/TeacherVerify';
 import TeacherHistory from '@/pages/teacher/TeacherHistory';
 
@@ -65,6 +66,14 @@ export default function App() {
           }
         />
         <Route
+          path="/teacher/handoff-queue"
+          element={
+            <ProtectedRoute allowedRoles={['teacher']}>
+              <TeacherHandoffQueue />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/teacher/verify"
           element={
             <ProtectedRoute allowedRoles={['teacher']}>
@@ -86,6 +95,14 @@ export default function App() {
           element={
             <ProtectedRoute allowedRoles={['admin']}>
               <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/handoff-queue"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <TeacherHandoffQueue />
             </ProtectedRoute>
           }
         />

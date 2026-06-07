@@ -5,6 +5,9 @@ import type {
   AuditLog,
   Statistics,
   CreateAuthorizationRequest,
+  HandoffQueueResponse,
+  HandoffQueueFilters,
+  AbnormalReason,
 } from '../types';
 
 const API_BASE = '/api';
@@ -161,6 +164,28 @@ export const authorizationsApi = {
   async getAuditLogs(id: number): Promise<ApiResponse<AuditLog[]>> {
     const response = await fetch(`${API_BASE}/authorizations/${id}/audit-logs`, {
       headers: getHeaders(),
+    });
+    return handleResponse(response);
+  },
+
+  async getHandoffQueue(filters?: HandoffQueueFilters): Promise<ApiResponse<HandoffQueueResponse>> {
+    const searchParams = new URLSearchParams();
+    if (filters?.className) searchParams.set('className', filters.className);
+    if (filters?.childName) searchParams.set('childName', filters.childName);
+    if (filters?.pickupPersonName) searchParams.set('pickupPersonName', filters.pickupPersonName);
+    if (filters?.idLast4) searchParams.set('idLast4', filters.idLast4);
+
+    const response = await fetch(`${API_BASE}/authorizations/handoff/queue?${searchParams.toString()}`, {
+      headers: getHeaders(),
+    });
+    return handleResponse(response);
+  },
+
+  async markAbnormal(id: number, reason: AbnormalReason): Promise<ApiResponse<AuthorizationWithDetails>> {
+    const response = await fetch(`${API_BASE}/authorizations/${id}/mark-abnormal`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ reason }),
     });
     return handleResponse(response);
   },

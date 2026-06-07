@@ -30,12 +30,14 @@ export default function Layout({ children }: LayoutProps) {
       case 'teacher':
         return [
           { path: '/teacher', label: '首页', icon: Home },
+          { path: '/teacher/handoff-queue', label: '放学交接队列', icon: Users },
           { path: '/teacher/verify', label: '待核验', icon: Shield },
           { path: '/teacher/history', label: '今日记录', icon: FileText },
         ];
       case 'admin':
         return [
           { path: '/admin', label: '仪表盘', icon: Home },
+          { path: '/admin/handoff-queue', label: '放学交接队列', icon: Users },
           { path: '/admin/verify', label: '待核验', icon: Shield },
           { path: '/admin/history', label: '全部记录', icon: FileText },
           { path: '/admin/audit', label: '审计日志', icon: Users },

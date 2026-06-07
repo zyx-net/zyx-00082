@@ -11,8 +11,13 @@ import {
   verifyIdLast4,
   checkCompletePermission,
   checkCancelPermission,
+  checkAbnormalPermission,
   validateIdLast4,
+  validateAbnormalReason,
+  getHandoffQueue,
 } from '../services/authorizationService.js';
+import { ABNORMAL_REASON_LABELS } from '../types/index.js';
+import type { AbnormalReason } from '../types/index.js';
 
 const router = Router();
 
@@ -403,6 +408,87 @@ router.get('/:id/audit-logs', requireAuth, async (req: Request, res: Response): 
     res.json({ success: true, data: logs });
   } catch (e) {
     res.status(500).json({ success: false, error: '获取审计记录失败' });
+  }
+});
+
+router.get('/handoff/queue', requireAuth, requireRole('teacher', 'admin'), async (req: Request, res: Response): Promise<void> => {
+  try {
+    processExpiredAuthorizations();
+    
+    const { className, childName, pickupPersonName, idLast4 } = req.query;
+    
+    const filters = {
+      ...(className && typeof className === 'string' ? { className } : {}),
+      ...(childName && typeof childName === 'string' ? { childName } : {}),
+      ...(pickupPersonName && typeof pickupPersonName === 'string' ? { pickupPersonName } : {}),
+      ...(idLast4 && typeof idLast4 === 'string' ? { idLast4 } : {}),
+    };
+
+    const result = getHandoffQueue(filters);
+    res.json({ success: true, data: result });
+  } catch (e) {
+    res.status(500).json({ success: false, error: '获取交接队列失败：' + (e as Error).message });
+  }
+});
+
+router.post('/:id/mark-abnormal', requireAuth, requireRole('teacher', 'admin'), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user = req.user as User;
+    const authId = parseInt(req.params.id);
+    const { reason } = req.body;
+    const { ip, userAgent } = getClientInfo(req);
+
+    const auth = db.prepare('SELECT * FROM authorizations WHERE id = ?').get(authId) as Authorization | undefined;
+    if (!auth) {
+      res.status(404).json({ success: false, error: '授权记录不存在' });
+      return;
+    }
+
+    processExpiredAuthorizations();
+    const authReloaded = db.prepare('SELECT * FROM authorizations WHERE id = ?').get(authId) as Authorization;
+
+    const permissionCheck = checkAbnormalPermission(authReloaded);
+    if (!permissionCheck.valid) {
+      res.status(400).json({ success: false, error: permissionCheck.error });
+      return;
+    }
+
+    if (authReloaded.status === 'CANCELLED' || authReloaded.status === 'EXPIRED') {
+      res.status(400).json({ success: false, error: '被撤销或过期的记录不能再交接' });
+      return;
+    }
+
+    const reasonCheck = validateAbnormalReason(reason);
+    if (!reasonCheck.valid) {
+      res.status(400).json({ success: false, error: reasonCheck.error });
+      return;
+    }
+
+    const reasonLabel = ABNORMAL_REASON_LABELS[reason as AbnormalReason];
+
+    const tx = db.transaction(() => {
+      db.prepare(`
+        UPDATE authorizations
+        SET status = 'ABNORMAL', 
+            abnormal_reason = ?, 
+            abnormal_by = ?, 
+            abnormal_at = CURRENT_TIMESTAMP, 
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(reason, user.id, authId);
+
+      db.prepare(`
+        INSERT INTO audit_logs (authorization_id, user_id, action, details, ip_address, user_agent)
+        VALUES (?, ?, 'MARK_ABNORMAL', ?, ?, ?)
+      `).run(authId, user.id, `标记异常：${reasonLabel}`, ip, userAgent);
+    });
+
+    tx();
+
+    const updated = getAuthorizationsWithDetails('WHERE a.id = ?', [authId])[0];
+    res.json({ success: true, data: updated, message: `已标记为异常：${reasonLabel}` });
+  } catch (e) {
+    res.status(500).json({ success: false, error: '标记异常失败：' + (e as Error).message });
   }
 });
 

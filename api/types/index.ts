@@ -8,7 +8,16 @@ export type AuthorizationStatus =
   | 'VERIFIED'
   | 'COMPLETED'
   | 'CANCELLED'
-  | 'EXPIRED';
+  | 'EXPIRED'
+  | 'ABNORMAL';
+
+export type AbnormalReason = 'ID_MISMATCH' | 'PICKUP_PERSON_ABSENT' | 'GUARDIAN_CANCELLED';
+
+export const ABNORMAL_REASON_LABELS: Record<AbnormalReason, string> = {
+  ID_MISMATCH: '证件不符',
+  PICKUP_PERSON_ABSENT: '接送人未到',
+  GUARDIAN_CANCELLED: '监护人临时撤销',
+};
 
 export interface User {
   id: number;
@@ -45,6 +54,9 @@ export interface Authorization {
   time_window_end: string;
   status: AuthorizationStatus;
   reject_reason: string | null;
+  abnormal_reason: AbnormalReason | null;
+  abnormal_by: number | null;
+  abnormal_at: string | null;
   verified_by: number | null;
   verified_at: string | null;
   completed_at: string | null;
@@ -69,6 +81,33 @@ export interface AuthorizationWithDetails extends Authorization {
   applicant_name: string;
   approver_name: string | null;
   verifier_name: string | null;
+  abnormal_handler_name: string | null;
+}
+
+export interface HandoffQueueFilters {
+  className?: string;
+  childName?: string;
+  pickupPersonName?: string;
+  idLast4?: string;
+}
+
+export interface HandoffQueueGroup {
+  class_name: string | null;
+  time_window_start: string;
+  time_window_end: string;
+  authorizations: AuthorizationWithDetails[];
+}
+
+export interface HandoffQueueResponse {
+  groups: HandoffQueueGroup[];
+  statistics: {
+    total: number;
+    approved: number;
+    pendingVerification: number;
+    verified: number;
+    abnormal: number;
+    completed: number;
+  };
 }
 
 export interface CreateAuthorizationRequest {
@@ -94,6 +133,7 @@ export const STATUS_LABELS: Record<AuthorizationStatus, string> = {
   COMPLETED: '已完成',
   CANCELLED: '已撤销',
   EXPIRED: '已过期',
+  ABNORMAL: '异常',
 };
 
 export const STATUS_COLORS: Record<AuthorizationStatus, string> = {
@@ -105,4 +145,18 @@ export const STATUS_COLORS: Record<AuthorizationStatus, string> = {
   COMPLETED: 'bg-green-100 text-green-800',
   CANCELLED: 'bg-gray-100 text-gray-800',
   EXPIRED: 'bg-gray-300 text-gray-700',
+  ABNORMAL: 'bg-purple-100 text-purple-800',
 };
+
+export interface MarkAbnormalRequest {
+  reason: AbnormalReason;
+}
+
+export interface HandoffQueueStatistics {
+  total: number;
+  approved: number;
+  pendingVerification: number;
+  verified: number;
+  abnormal: number;
+  completed: number;
+}
